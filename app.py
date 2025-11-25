@@ -1,9 +1,9 @@
 import streamlit as st
 import numpy as np
-import cv2
 import joblib
 from pathlib import Path
 from skimage import color, transform
+from PIL import Image
 import zipfile
 
 # =========================
@@ -39,29 +39,59 @@ CLASS_LABELS = [
 # =========================
 def ensure_model_unzipped():
     """
-    If svm_final.pkl doesn't exist but svm_final.zip does,
-    extract svm_final.pkl from the zip.
+    Ensure svm_final.pkl exists.
 
-    Make sure your zip contains a file literally named 'svm_final.pkl'
-    at the top level.
+    If svm_final.pkl is missing but svm_final.zip is present:
+      - open the zip
+      - find the first .pkl inside
+      - extract it
+      - rename it to svm_final.pkl (if needed)
     """
-    if not MODEL_PKL.exists():
-        if not MODEL_ZIP.exists():
-            raise FileNotFoundError(
-                "Neither 'svm_final.pkl' nor 'svm_final.zip' found in the app directory."
-            )
-        # Extract only svm_final.pkl from the zip
+    if MODEL_PKL.exists():
+        return
+
+    if not MODEL_ZIP.exists():
+        st.error(
+            "❌ Model not found.\n\n"
+            "I looked for 'svm_final.pkl' and 'svm_final.zip' in the app folder, "
+            "but neither exists.\n\n"
+            "Please make sure you uploaded **svm_final.zip** to the repo."
+        )
+        st.stop()
+
+    try:
         with zipfile.ZipFile(MODEL_ZIP, "r") as zf:
-            zf.extract("svm_final.pkl")  # name inside the zip must match exactly
+            # Find any .pkl file inside the zip
+            pkl_names = [n for n in zf.namelist() if n.lower().endswith(".pkl")]
+            if not pkl_names:
+                st.error(
+                    "❌ No .pkl file found inside svm_final.zip.\n\n"
+                    "Please check the zip content. It must contain your SVM model (.pkl)."
+                )
+                st.stop()
+
+            # Take the first .pkl file
+            member = pkl_names[0]
+            extracted_path_str = zf.extract(member)  # filepath created on disk
+            extracted_path = Path(extracted_path_str)
+
+            # If the extracted file isn't named svm_final.pkl, rename it
+            if extracted_path.name != MODEL_PKL.name:
+                extracted_path.rename(MODEL_PKL)
+
+    except Exception as e:
+        st.error(f"❌ Failed to extract model from svm_final.zip: {e}")
+        st.stop()
+
 
 @st.cache_resource
 def load_model(model_path: str):
-    # If pkl not present but zip is, unzip first
+    # Ensure .pkl exists (extract from zip if needed)
     ensure_model_unzipped()
 
     path = Path(model_path)
     if not path.exists():
-        st.error(f"Model file not found: {path.resolve()}")
+        st.error(f"❌ Model file not found after extraction: {path.resolve()}")
         st.stop()
 
     try:
@@ -69,7 +99,9 @@ def load_model(model_path: str):
     except Exception as e:
         st.error(f"❌ Failed to load model with joblib: {e}")
         st.stop()
+
     return model
+
 
 model = load_model("svm_final.pkl")
 
@@ -84,23 +116,15 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
         small = transform.resize(gray, (30,30))
         X_small.append(small.flatten())
 
-    - Streamlit gives RGB uint8 image [0..255]
-    - We convert to float [0..1], then same steps.
+    - image: RGB uint8 [0..255]
+    - convert to float [0..1], then same steps.
     """
-    # Convert to float32 [0, 1]
     img_float = image.astype("float32") / 255.0
-
-    # RGB → grayscale (float)
     gray = color.rgb2gray(img_float)
-
-    # Resize to 30x30 (same as training)
     small = transform.resize(gray, (30, 30), anti_aliasing=True)
-
-    # Flatten to 900-dim vector
     features = small.flatten().astype("float32")
-
-    # Shape (1, n_features) for sklearn pipeline
     return features.reshape(1, -1)
+
 
 def predict_gesture(image: np.ndarray):
     """
@@ -108,8 +132,7 @@ def predict_gesture(image: np.ndarray):
     The loaded 'model' is your Pipeline(PCA -> SVC).
     """
     features = preprocess_image(image)
-    label = model.predict(features)[0]  # this is your class string: "A", "B", ..., "SPACE", etc.
-    # No predict_proba, since SVC(probability=False) by default
+    label = model.predict(features)[0]  # "A", "B", ..., "SPACE", etc.
     return label
 
 # =========================
@@ -136,19 +159,17 @@ uploaded_image = None
 if mode == "Upload Image":
     file = st.file_uploader("Upload a hand gesture image", type=["jpg", "jpeg", "png"])
     if file is not None:
-        file_bytes = np.asarray(bytearray(file.read()), dtype=np.uint8)
-        img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        uploaded_image = img_rgb
+        img = Image.open(file).convert("RGB")
+        img_np = np.array(img)
+        uploaded_image = img_np
         st.image(uploaded_image, caption="Uploaded Image", use_container_width=True)
 
 else:  # Use Camera
     camera_img = st.camera_input("Capture a hand gesture")
     if camera_img is not None:
-        file_bytes = np.asarray(bytearray(camera_img.getvalue()), dtype=np.uint8)
-        img_bgr = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        uploaded_image = img_rgb
+        img = Image.open(camera_img).convert("RGB")
+        img_np = np.array(img)
+        uploaded_image = img_np
         st.image(uploaded_image, caption="Captured Image", use_container_width=True)
 
 # =========================
