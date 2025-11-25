@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 st.title("✋ Hand Gesture Recognition (SVM)")
-st.write("Model: **svm_final.pkl** · Classes: A–Z, SPACE, DELETE, NOTHING")
+st.write("Model: SVM  Classes: A–Z, SPACE, DELETE, NOTHING")
 
 # =========================
 # FILE PATHS
